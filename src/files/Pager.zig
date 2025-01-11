@@ -58,7 +58,7 @@ pub const FilePager = struct {
         std.mem.set(u64, self.bitmapBuffer, 0);
 
         self.current_access_idx = 0;
-        for (self.accessed) |*access, i| {
+        for (self.accessed, 0..) |*access, i| {
             access.data = self.bitmapBuffer[i..(i * single_bitmap_size + single_bitmap_size)];
         }
 
@@ -67,7 +67,7 @@ pub const FilePager = struct {
 
         self.map = try allocator.alloc(lazy.Lazy([*]u8), NumberOfBlocks);
         errdefer allocator.free(self.map);
-        @memset(@ptrCast([*]u8, self.map.ptr), 0, BlockMapLengthInBytes);
+        @memset(@as([*]u8, self.map.ptr), 0);
 
         self.file = try files.FileRing.init(path, allocator);
         self.limits = limits;
@@ -117,9 +117,9 @@ pub const FilePager = struct {
     }
 
     fn complete_read(res: anyerror![]u8, user_data: u64) void {
-        var state = @intToPtr(*ReadData, user_data);
+        var state = @as(*ReadData, user_data);
         defer state.self.allocator.destroy(state);
-        var buf = res catch |err| {
+        const buf = res catch |err| {
             state.block.opps(err);
             return;
         };
@@ -139,8 +139,8 @@ pub const FilePager = struct {
         if (self.size_used.loadUnchecked() < self.limits.self_soft)
             return 0; // nothing to do, we are below the limits
 
-        for (self.map) |l, i| {
-            var cur = l.data;
+        for (self.map, 0..) |l, i| {
+            const cur = l.data;
             if (cur.data.references == 1 and cur.data.val != null) {
                 try free.append(i);
             }
@@ -150,13 +150,13 @@ pub const FilePager = struct {
         var freed: usize = 0;
         var idx: usize = 0;
         while (idx < free.items.len) : (idx += 1) {
-            var cur = self.map[free.items[idx]];
+            const cur = self.map[free.items[idx]];
             if (self.map[free.items[idx]].reset() == false)
                 continue;
             if (cur.data.data.val) |val| {
                 try self.file.release(val[0..BlockSize]);
                 freed += BlockSize;
-                var current_used = @atomicRmw(u64, &self.size_used.value, .Sub, BlockSize, .SeqCst) - BlockSize;
+                const current_used = @atomicRmw(u64, &self.size_used.value, .Sub, BlockSize, .SeqCst) - BlockSize;
                 if (current_used < self.limits.self_soft)
                     return freed; // returned enough
             }
@@ -170,7 +170,7 @@ pub const FilePager = struct {
         var val: usize = 0;
         var idx: u6 = 0;
         while (idx < NumberOfAccessGenerations) : (idx += 1) {
-            var in_use = self.accessed[(idx + self.current_access_idx) % NumberOfAccessGenerations].get(block_num);
+            const in_use = self.accessed[(idx + self.current_access_idx) % NumberOfAccessGenerations].get(block_num);
             if (in_use) {
                 val |= (@as(usize, 1) << (NumberOfAccessGenerations - idx));
             }
@@ -183,7 +183,7 @@ pub const FilePager = struct {
     }
 
     fn read_from_disk(self: *FilePager, block_num: u64) !void {
-        var current_used = @atomicRmw(u64, &self.size_used.value, .Add, BlockSize, .SeqCst) + BlockSize;
+        const current_used = @atomicRmw(u64, &self.size_used.value, .Add, BlockSize, .SeqCst) + BlockSize;
         if (current_used > self.limits.soft()) {
             _ = try self.evict();
             if (self.size_used.load(.SeqCst) > self.limits.hard()) {
@@ -199,7 +199,7 @@ pub const FilePager = struct {
         errdefer self.allocator.destroy(state);
         state.self = self;
         state.block = &self.map[block_num];
-        try self.file.read(block_num * BlockSize, BlockSize, complete_read, @ptrToInt(state));
+        try self.file.read(block_num * BlockSize, BlockSize, complete_read, @intFromPtr(state));
     }
 
     fn get_disjointed(self: *FilePager, page_num: u64, number_of_pages: u32) ![]const u8 {
@@ -232,7 +232,7 @@ pub const FilePager = struct {
             }
         }
         if (should_init) {
-            try self.file.read(page_num * PageSize, number_of_pages * PageSize, complete_read, @ptrToInt(lazy_val));
+            try self.file.read(page_num * PageSize, number_of_pages * PageSize, complete_read, @intFromPtr(lazy_val));
         }
         var buf = try lazy_val.get();
         return buf[0 .. number_of_pages * PageSize];
